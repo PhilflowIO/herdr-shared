@@ -1,0 +1,11 @@
+# Theme repos tools/sync-themes.sh keeps in step.
+# <repo-dir-name> <test command...>; the dir is resolved against
+# ${HERDR_THEMES_ROOT:-<parent of this repo>}.
+herdr-arcade node --import ./tests/stubs/register.mjs --test tests/
+herdr-chiikawa-cards node --import ./tests/stubs/register.mjs --test tests/
+herdr-claude-accounts true
+herdr-control-tower node --test tests/
+herdr-fm27 node --import ./tests/stubs/register.mjs --test tests/
+herdr-inkpaw-hollow true
+herdr-night-city-downtown npm test
+herdr-regent sh -c 'cd mods/regent && node --test tests/'

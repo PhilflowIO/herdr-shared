@@ -9,21 +9,24 @@
 1. 이 저장소에서 고친다.
 2. `npm test` 로 확인한다.
 3. `./tools/install.sh` 로 `${HERDR_SHARED_HOME:-$HOME/.local/share/herdr-shared}` 를 갱신한다.
-4. 아래 표의 테마 저장소마다 필요한 그룹을 다시 vendor 한다.
+4. `tools/sync-themes.sh --commit --push` 로 모든 테마에 반영한다.
 
 ```sh
-# 예: fm27
-cd ~/git-repo/herdr-fm27
-~/git-repo/herdr-shared/tools/vendor.sh \
-  accounts mods/fm-staff scan mods/fm-squad editor mods/fm-editor \
-  herdr-open tools/herdr-open merge-keys tools
+~/git-repo/herdr-shared/tools/sync-themes.sh --commit --push
 ```
 
-`vendor.sh` 는 `<group> <target-dir>` 쌍을 필요한 만큼 반복해서 받는다.
+`sync-themes.sh` 는 `themes.list` 의 테마마다 `vendor/herdr-shared` 서브모듈을 이 저장소의
+HEAD 로 옮기고, 테마의 `herdr-shared.list` 가 가리키는 사본을 다시 쓴 뒤 `check-vendor.sh`
+와 테마 테스트를 돌리고, 포인터와 사본을 `chore: herdr-shared <short sha> 반영` 으로 커밋한다.
+이 저장소가 clean 이고 HEAD 가 upstream 에 있을 때만, 선택한 테마가 모두 온전할 때만 시작한다.
 
-## 테마 저장소와 대상 경로
+테마별 대상은 각 테마 저장소의 `herdr-shared.list` 가 정본이다. 손으로 vendor 하지 않는다.
+`vendor.sh` 는 `<group> <target-dir>` 쌍을 필요한 만큼 반복해서 받고, `--list <테마루트>` 로
+`herdr-shared.list` 전체를 한 번에 처리한다.
 
-| 저장소 | 다시 vendor 할 그룹 → 대상 |
+## 테마별 그룹 → 대상
+
+| 저장소 | 그룹 → 대상 (테마의 `herdr-shared.list`) |
 |---|---|
 | herdr-arcade | accounts → mods/arcade-accounts, scan → mods/arcade-cards, editor → mods/arcade-editor, herdr-open → tools/herdr-open |
 | herdr-chiikawa-cards | accounts → mods/chiikawa-accounts, scan → mods/chiikawa-cards, editor → mods/chiikawa-editor, herdr-open → tools/herdr-open |

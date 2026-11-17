@@ -19,7 +19,9 @@ bin/                    runtime files the installed mods link to
 tools/
   merge-keys.py         add a layout's key zones without changing the person's bindings
   herdr-open/           the single Herdr Open applet builder
-  vendor.sh             copy a group into a theme repo
+  vendor.sh             copy a group into a theme repo, or every pair in its herdr-shared.list
+  check-vendor.sh       compare a theme's copies with this repo
+  sync-themes.sh        pin, copy, check and test every theme, then commit
   install.sh            copy bin/ into the shared home
   link-installed.sh     link an installed mod folder's files to the shared home
 tests/                  node:test suites for everything above (`npm test`)
@@ -44,17 +46,70 @@ its siblings next to itself.
 
 ```sh
 tools/vendor.sh <group> <target-dir> [<group> <target-dir>]...
+tools/vendor.sh --list <theme-root>
 ```
 
 Copies the group's files into the target, keeping the exec bit, and prints each file it wrote.
-Examples:
+`--list` does the same for every pair in `<theme-root>/herdr-shared.list`. Examples:
 
 ```sh
 tools/vendor.sh accounts mods/arcade-accounts scan mods/arcade-cards editor mods/arcade-editor
 tools/vendor.sh herdr-open tools/herdr-open merge-keys tools
 ```
 
-An unknown group or a missing source file fails without writing anything for that group.
+An unknown group or a missing source file fails without writing anything for that group. With
+`--list`, an unknown group or a missing list exits 2.
+
+## Using it from a theme
+
+A theme takes this repo as a submodule and keeps real copies of the files it uses:
+
+```sh
+git submodule add https://github.com/lcalmsky/herdr-shared.git vendor/herdr-shared
+```
+
+Write `herdr-shared.list` in the theme root — one `<group> <target-dir>` pair per line, `#`
+comments and blank lines ignored:
+
+```
+accounts mods/<mod>-accounts
+scan     mods/<mod>-cards
+```
+
+Then write and check the copies from the pinned submodule:
+
+```sh
+vendor/herdr-shared/tools/vendor.sh --list .
+vendor/herdr-shared/tools/check-vendor.sh .
+```
+
+`check-vendor.sh` compares each listed file with the submodule byte for byte and by the exec bit,
+names every file that drifted, and exits 1. On a clean theme it prints
+`check-vendor: N files match herdr-shared <short sha>`.
+
+The mod folders hold real files, not symlinks into the submodule, because a herdr.dev gallery
+install copies a mod folder from GitHub as it stands: a link and a submodule directory do not
+survive that copy. The submodule is the source; the committed copies are what people install.
+
+### Maintainer flow
+
+Edit here, then:
+
+```sh
+npm test
+git commit -am "..." && git push
+tools/sync-themes.sh --commit --push
+```
+
+`sync-themes.sh` reads `themes.list` (one `<repo-dir-name> <test command...>` per line, each dir
+under `${HERDR_THEMES_ROOT:-<parent of this repo>}`). For each theme it pins
+`vendor/herdr-shared` to this repo's HEAD, runs the theme's `vendor.sh --list .` and
+`check-vendor.sh`, runs the theme's test command, and commits the submodule pointer and the
+copies with `chore: herdr-shared <short sha> 반영`. Before touching anything it refuses when
+this repo is dirty or its HEAD is not on an upstream branch, or when a theme is missing, has no
+`herdr-shared.list`, has no submodule, or has uncommitted changes to tracked files (untracked
+files are allowed and never added). `--commit` alone leaves the commits local; `--push` (which
+requires `--commit`) pushes only themes that have an `origin` remote.
 
 ## install.sh
 
