@@ -125,6 +125,23 @@ test("the identity takes the first real prompt, the handoff H1 it names, its rou
     assert.equal(slashId.round, 3);
     assert.ok(slashId.firstPrompt.startsWith(handoff));
 
+    const spaced = box.put("Mobile Documents/vault/.claude/handoff/2026-11-20-blog.md", "# 기술블로그 2회차\n");
+    for (const [name, text] of [["plain", `${spaced} 를 먼저 읽고 시작해줘.`], ["ticked", `\`${spaced}\` 를 먼저 읽어`]]) {
+      const file = box.put(`t/spaced-${name}.jsonl`, user(text));
+      assert.equal(box.call(`session_identity(${JSON.stringify(file)}, "sp-${name}", "/x")`).handoff, "기술블로그 2회차",
+        `a handoff path with a space is found (${name})`);
+    }
+    const second = box.put("Mobile Documents/vault/.claude/handoff/second.md", "# 두 번째\n");
+    const missing = join(box.home, "Mobile Documents/vault/.claude/handoff/missing.md");
+    const both = box.put("t/spaced-both.jsonl", user(`${missing} 말고 ${second} 를 읽어`));
+    assert.equal(box.call(`session_identity(${JSON.stringify(both)}, "sp-both", "/x")`).handoff, "두 번째",
+      "a missing path is skipped for the next one that exists");
+    const slashes = "/a".repeat(100000);
+    const long = box.put("t/spaced-long.jsonl", user(`${slashes}/.claude/handoff/x.md ${slashes}/.claude/handoff/y.md`));
+    const started = Date.now();
+    assert.equal(box.call(`session_identity(${JSON.stringify(long)}, "sp-long", "/x")`).handoff, undefined);
+    assert.ok(Date.now() - started < 5000, "a long one-line prompt stays fast");
+
     const english = box.put("t/round.jsonl", user("round 4 continue"));
     assert.equal(box.call(`session_identity(${JSON.stringify(english)}, "s2", "/x")`).round, 4);
 
