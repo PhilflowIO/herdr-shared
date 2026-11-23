@@ -858,3 +858,19 @@ test("cca rm says what went and that the login goes with it; --porcelain-rm prin
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("cca rm reads the real /proc quietly, skipping processes it may not read or that just ended", { skip: !existsSync("/proc/self/environ") && "no /proc" }, () => {
+  const home = towerHome("rm-proc-");
+  try {
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state` };
+    delete env.CCA_PS;
+    delete env.CCA_PROC;
+    const run = (...args) => spawnSync("sh", [CCA, ...args], { env, encoding: "utf8" });
+    assert.equal(run("add", "work").status, 0);
+    const rm = run("--porcelain-rm", "work");
+    assert.equal(rm.status, 0);
+    assert.equal(rm.stderr, "", "nothing on stderr");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

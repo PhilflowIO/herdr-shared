@@ -609,7 +609,9 @@ config_dir_pids() {
       p=${f%/environ}
       p=${p##*/}
       case "$p" in *[!0-9]*) continue ;; esac
-      tr '\000' '\n' < "$f" 2>/dev/null | grep -Fqx -e "CLAUDE_CONFIG_DIR=$want" -e "CLAUDE_CONFIG_DIR=$want/" \
+      # The shell opens the file, so its error (a process of one's own that may not be read, or one
+      # that just ended) is silenced around the whole read, not just tr's.
+      { tr '\000' '\n' < "$f"; } 2>/dev/null | grep -Fqx -e "CLAUDE_CONFIG_DIR=$want" -e "CLAUDE_CONFIG_DIR=$want/" \
         && printf '%s\n' "$p"
     done
     return 0
