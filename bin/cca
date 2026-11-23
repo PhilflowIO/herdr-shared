@@ -361,21 +361,32 @@ plan_line() {
 }
 
 # The status line carries only the 5h and 7d windows, so the Fable weekly window comes from the
-# usage endpoint /usage reads, with the token Claude Code keeps in the keychain for that config dir.
+# usage endpoint /usage reads, with the token Claude Code keeps for that config dir: in the macOS
+# keychain, or where there is none (Linux), in the config dir's .credentials.json. The credentials go
+# straight to usage-api.mjs on stdin; cca neither prints nor stores them.
 # It is written to <name>.api.json, apart from the file usage-tap.sh rewrites.
 api_fetch() {
   name=$1 dir=$2
-  if [ "$name" = default ]; then svc="Claude Code-credentials"
-  else svc="Claude Code-credentials-$(printf '%s' "$dir" | shasum -a 256 | cut -c1-8)"; fi
-  creds=$(security find-generic-password -s "$svc" -w 2>/dev/null) || return 0
-  body=$(printf '%s' "$creds" | node "$HERE/usage-api.mjs" 2>/dev/null) || return 0
+  creds=
+  if command -v security >/dev/null 2>&1; then
+    if [ "$name" = default ]; then svc="Claude Code-credentials"
+    else svc="Claude Code-credentials-$(printf '%s' "$dir" | shasum -a 256 | cut -c1-8)"; fi
+    creds=$(security find-generic-password -s "$svc" -w 2>/dev/null) || creds=
+  fi
+  if [ -n "$creds" ]; then
+    body=$(printf '%s' "$creds" | node "$HERE/usage-api.mjs" 2>/dev/null) || return 0
+  elif [ -f "$dir/.credentials.json" ] && [ -r "$dir/.credentials.json" ]; then
+    body=$(node "$HERE/usage-api.mjs" < "$dir/.credentials.json" 2>/dev/null) || return 0
+  else
+    return 0
+  fi
   [ -n "$body" ] || return 0
   mkdir -p "$STATE" && printf '%s' "$body" > "$STATE/$name.api.json.tmp.$$" && mv "$STATE/$name.api.json.tmp.$$" "$STATE/$name.api.json"
 }
 
 # At most every 5 minutes, in the background so the porcelain read never waits on the network.
 api_refresh() {
-  command -v node >/dev/null 2>&1 && command -v security >/dev/null 2>&1 || return 0
+  command -v node >/dev/null 2>&1 || return 0
   mkdir -p "$STATE" 2>/dev/null || return 0
   stamp="$STATE/.api-fetch"
   [ -n "$(find "$stamp" -mmin -5 2>/dev/null)" ] && return 0

@@ -685,3 +685,33 @@ test("--porcelain-start sets the account up and runs claude through the login sh
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("without a keychain the usage endpoint gets the account's .credentials.json, as on Linux", async () => {
+  const home = mkdtempSync(join(tmpdir(), "creds-"));
+  try {
+    const state = `${home}/state/herdr-tower/usage`;
+    mkdirSync(`${home}/.claude-accounts/work`, { recursive: true });
+    const creds = '{"claudeAiOauth":{"accessToken":"sk-test"}}';
+    writeFileSync(`${home}/.claude-accounts/work/.credentials.json`, creds);
+    // No network and no keychain: security finds nothing, and node answers for usage-api.mjs itself.
+    mkdirSync(`${home}/bin`);
+    writeFileSync(`${home}/bin/security`, "#!/bin/sh\nexit 44\n");
+    writeFileSync(`${home}/bin/node`, `#!/bin/sh
+case "$1" in
+  *usage-api.mjs) cat > "${home}/got"; printf '{"fetched_at":1,"fable":{"used":7,"resets_at":4102444800}}' ;;
+  *) exec "${process.execPath}" "$@" ;;
+esac
+`);
+    chmodSync(`${home}/bin/security`, 0o755);
+    chmodSync(`${home}/bin/node`, 0o755);
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state`, PATH: `${home}/bin:${process.env.PATH}` };
+    assert.equal(spawnSync("sh", [CCA, "--porcelain"], { env }).status, 0);
+    for (let i = 0; i < 100 && !existsSync(`${state}/work.api.json`); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(readFileSync(`${home}/got`, "utf8"), creds);
+    const out = spawnSync("sh", [CCA, "--porcelain"], { env, encoding: "utf8" }).stdout;
+    assert.match(out, /^U\twork\t\t\t\t\t7\t4102444800$/m);
+    assert.doesNotMatch(readFileSync(`${state}/work.api.json`, "utf8"), /sk-test/, "the token is never stored");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
