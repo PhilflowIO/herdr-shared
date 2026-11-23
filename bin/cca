@@ -703,6 +703,51 @@ cmd_run() {
   exec claude "$@"
 }
 
+# How the app starts Claude Code in a pane: --porcelain-start <name> [<session id> <cwd>]. It sets the
+# account up as `cca <name>` does, changes into <cwd> to resume <session id> there, and starts
+# claude through the person's login shell as an interactive one, so the PATH and variables their
+# shell startup files set (node version managers, proxies) reach Claude Code and its MCP servers
+# just as in a terminal tab. Shells that take -l -i -c get them; any other $SHELL, or none, falls
+# back to sh -l. Exit 2: a bad name, session id or missing cwd; 3: no such account; 1: no such folder.
+cmd_porcelain_start() {
+  name=${1:-}
+  sid=${2-}
+  wd=${3-}
+  case "$name" in
+    default) ;;
+    *)
+      reserved_name "$name" && die_as 2 "$name is a cca command."
+      folder_reserved "$name" && die_as 2 "$name is a cca command."
+      valid_name "$name" || die_as 2 "Use letters, digits, - or _."
+      [ -d "$HOME/.claude-accounts/$name" ] || die_as 3 "No account $name."
+      ;;
+  esac
+  cmd="exec claude"
+  if [ -n "$sid" ]; then
+    printf '%s\n' "$sid" | grep -Eqx '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' \
+      || die_as 2 "not a session id: $sid"
+    [ -n "$wd" ] || die_as 2 "a resumed session needs its folder"
+    cd "$wd" || die_as 1 "cannot change into $wd"
+    cmd="exec claude --resume $sid"
+  fi
+  if [ "$name" = default ]; then
+    unset CLAUDE_CONFIG_DIR
+  else
+    CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/$name"
+    export CLAUDE_CONFIG_DIR
+    sync_mcp "$CLAUDE_CONFIG_DIR" || :
+  fi
+  CCA_ACCOUNT=$name
+  export CCA_ACCOUNT
+  # The command is plain words only, so every one of these shells reads it the same way.
+  login=${SHELL:-}
+  case "${login##*/}" in
+    sh|bash|zsh|ksh|mksh|dash|yash|fish)
+      [ -x "$login" ] && exec "$login" -l -i -c "$cmd" ;;
+  esac
+  exec /bin/sh -l -c "$cmd"
+}
+
 cmd_current() {
   current_default
 }
@@ -924,6 +969,7 @@ case "${1:-}" in
   --porcelain-add-codex) shift; cmd_porcelain_add_codex "${1:-}" ;;
   --porcelain-add-model) shift; cmd_porcelain_add_model "${1-}" "${2-}" ;;
   --porcelain-rename) shift; cmd_porcelain_rename "${1:-}" "${2-}" ;;
+  --porcelain-start) shift; cmd_porcelain_start "${1:-}" "${2-}" "${3-}" ;;
   --*) die "unknown option $1" ;;
   *) cmd_run "$@" ;;
 esac

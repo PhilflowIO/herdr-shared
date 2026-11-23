@@ -654,3 +654,34 @@ test("cca add and cca <name> copy only mcpServers from ~/.claude.json into the a
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("--porcelain-start sets the account up and runs claude through the login shell, interactive", () => {
+  const home = towerHome("start-");
+  try {
+    mkdirSync(`${home}/.claude-accounts/work`, { recursive: true });
+    mkdirSync(`${home}/proj dir`);
+    writeFileSync(`${home}/.claude.json`, JSON.stringify({ mcpServers: { a: {} } }));
+    // A login shell named zsh that shows the arguments and environment it was given.
+    mkdirSync(`${home}/shells`);
+    const shell = `${home}/shells/zsh`;
+    writeFileSync(shell, '#!/bin/sh\nprintf "%s|%s|%s|%s\\n" "$*" "${CLAUDE_CONFIG_DIR-unset}" "${CCA_ACCOUNT-}" "$PWD"\n');
+    chmodSync(shell, 0o755);
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state`, SHELL: shell,
+      CLAUDE_CONFIG_DIR: `${home}/elsewhere` };
+    const start = (...args) => spawnSync("sh", [CCA, "--porcelain-start", ...args], { env, encoding: "utf8" });
+    const sid = "0123abcd-0123-4567-89ab-0123456789ab";
+
+    assert.equal(start("work", sid, `${home}/proj dir`).stdout,
+      `-l -i -c exec claude --resume ${sid}|${home}/.claude-accounts/work|work|${home}/proj dir\n`);
+    assert.deepEqual(JSON.parse(readFileSync(`${home}/.claude-accounts/work/.claude.json`, "utf8")), { mcpServers: { a: {} } });
+    assert.match(start("default").stdout, /^-l -i -c exec claude\|unset\|default\|/);
+
+    assert.equal(start("nope").status, 3);
+    assert.equal(start("bad name").status, 2);
+    assert.equal(start("work", "not-a-uuid", home).status, 2);
+    assert.equal(start("work", sid).status, 2, "a resume needs its folder");
+    assert.equal(start("work", sid, `${home}/missing`).status, 1);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
