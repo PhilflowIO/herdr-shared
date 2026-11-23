@@ -8,7 +8,7 @@ and `tools/vendor.sh` writes those copies. Never hand-edit a vendored copy: edit
 
 ```
 bin/                    runtime files the installed mods link to
-  cca                   Claude Code accounts: list, use, add, share, codex
+  cca                   Claude Code accounts: list, use, add, rm, share, codex
   usage-tap.sh          status-line hook that records the account's rate limits
   usage-api.mjs         reads the Fable and whole-week rows from the usage endpoint
   codex-usage.mjs       reads Codex's rollout logs and auth.json

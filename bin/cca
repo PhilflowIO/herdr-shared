@@ -25,7 +25,7 @@ die() { printf 'cca: %s\n' "$*" >&2; exit 1; }
 die_as() { code=$1; shift; printf 'cca: %s\n' "$*" >&2; exit "$code"; }
 
 reserved_name() {
-  case "$1" in ls|add|share|use|current|launch|shell-init|help|'-'*) return 0 ;; esac
+  case "$1" in ls|add|rm|share|use|current|launch|shell-init|help|'-'*) return 0 ;; esac
   return 1
 }
 
@@ -596,6 +596,85 @@ cmd_add() {
   printf 'Log in with: cca %s\n' "$name"
 }
 
+# The pids of the live processes whose environment sets CLAUDE_CONFIG_DIR to $1 (with or without a
+# trailing slash), one per line, read the same way as pane_env: every /proc/<pid>/environ on Linux
+# (only one's own processes are readable, and only they can run under one's accounts), else the
+# environment ps -E prints after each command on BSD and macOS.
+config_dir_pids() {
+  want=$1
+  proc=${CCA_PROC:-/proc}
+  if [ -z "${CCA_PS:-}" ] && [ -d "$proc" ]; then
+    for f in "$proc"/[0-9]*/environ; do
+      [ -r "$f" ] || continue
+      p=${f%/environ}
+      p=${p##*/}
+      case "$p" in *[!0-9]*) continue ;; esac
+      tr '\000' '\n' < "$f" 2>/dev/null | grep -Fqx -e "CLAUDE_CONFIG_DIR=$want" -e "CLAUDE_CONFIG_DIR=$want/" \
+        && printf '%s\n' "$p"
+    done
+    return 0
+  fi
+  ${CCA_PS:-ps} -E -ww -A -o pid= -o command= 2>/dev/null | awk -v a="CLAUDE_CONFIG_DIR=$want" -v b="CLAUDE_CONFIG_DIR=$want/" '
+    { for (i = 2; i <= NF; i++) if ($i == a || $i == b) { print $1; break } }'
+}
+
+# Deletes ~/.claude-accounts/<name> and what cca keeps about it: its label, its usage files, and the
+# global default when that was this account (back to default). rm -r removes a symlink itself and
+# never what it points at, so the history, settings and everything else linked in from ~/.claude stay.
+# The folder is first renamed to a dot name, which no listing reads, so a removal that fails half way
+# never leaves a half account behind. The login goes with the folder's .credentials.json; a macOS
+# keychain entry for it is left alone. Exit 2: default, a reserved or invalid name; 3: no such account;
+# 4: a live process still runs with it as CLAUDE_CONFIG_DIR (its pids on stderr); 1: could not delete.
+remove_account() {
+  name=$1
+  [ -n "$name" ] || { printf 'usage: cca rm <name>\n' >&2; return 2; }
+  [ "$name" = default ] && { printf 'default is the ~/.claude account and cannot be removed.\n' >&2; return 2; }
+  reserved_name "$name" && { printf '%s is a cca command.\n' "$name" >&2; return 2; }
+  folder_reserved "$name" && { printf '%s is a cca command.\n' "$name" >&2; return 2; }
+  valid_name "$name" || { printf 'Use letters, digits, - or _.\n' >&2; return 2; }
+  dir="$HOME/.claude-accounts/$name"
+  { [ -d "$dir" ] || [ -L "$dir" ]; } || { printf 'No account %s.\n' "$name" >&2; return 3; }
+  pids=$(config_dir_pids "$dir" | tr '\n' ' ' | sed 's/ *$//')
+  if [ -n "$pids" ]; then
+    printf '%s is in use by process %s; quit its Claude Code first.\n' "$name" "$pids" >&2
+    return 4
+  fi
+  gone="$HOME/.claude-accounts/.removing-$name.$$"
+  mv "$dir" "$gone" || { printf 'Could not remove %s.\n' "$dir" >&2; return 1; }
+  rm -rf -- "$gone" || { printf 'Could not delete %s; delete it by hand.\n' "$gone" >&2; return 1; }
+  rm -f -- "$STATE/$name.json" "$STATE/$name.api.json"
+  if [ -r "$LABELS" ] && awk -F '\t' -v n="$name" '$1 == n { f = 1 } END { exit !f }' "$LABELS"; then
+    tmp="$TOWER/.labels.$$"
+    if awk -F '\t' -v n="$name" '$1 != n' "$LABELS" > "$tmp" && mv "$tmp" "$LABELS"; then :; else
+      rm -f "$tmp"; printf 'Could not write %s.\n' "$LABELS" >&2; return 1
+    fi
+  fi
+  if [ -r "$CURRENT" ]; then
+    cur=
+    IFS= read -r cur < "$CURRENT" || [ -n "$cur" ] || cur=
+    if [ "$cur" = "$name" ]; then
+      tmp="$TOWER/.current.$$"
+      if printf 'default\n' > "$tmp" && mv "$tmp" "$CURRENT"; then :; else
+        rm -f "$tmp"; printf 'Could not write %s.\n' "$CURRENT" >&2; return 1
+      fi
+    fi
+  fi
+  return 0
+}
+
+cmd_rm() {
+  name=${1:-}
+  remove_account "$name" || exit $?
+  printf 'Removed ~/.claude-accounts/%s.\n' "$name"
+  printf 'Its login went with it; history and settings shared from ~/.claude stay.\n'
+}
+
+cmd_porcelain_rm() {
+  name=${1:-}
+  remove_account "$name" || exit $?
+  printf '%s\n' "$HOME/.claude-accounts/$name"
+}
+
 cmd_codex_add() {
   name=${1:-}
   make_codex_account "$name" || exit $?
@@ -903,7 +982,7 @@ claude() {
       read -r _cca_cur < "${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/current" || [ -n "$_cca_cur" ] || _cca_cur=
     fi
     case "$_cca_cur" in
-      ''|*[!A-Za-z0-9_-]*|default|ls|add|share|use|current|shell-init|help) _cca_cur= ;;
+      ''|*[!A-Za-z0-9_-]*|default|ls|add|rm|share|use|current|shell-init|help) _cca_cur= ;;
     esac
     if [ -n "$_cca_cur" ] && [ -d "$HOME/.claude-accounts/$_cca_cur" ]; then
       CLAUDE_CONFIG_DIR="$HOME/.claude-accounts/$_cca_cur" command claude "$@"
@@ -919,7 +998,7 @@ codex() {
       read -r _cca_codex < "${XDG_STATE_HOME:-$HOME/.local/state}/herdr-tower/codex-current" || [ -n "$_cca_codex" ] || _cca_codex=
     fi
     case "$_cca_codex" in
-      ''|*[!A-Za-z0-9_-]*|default|codex|ls|add|share|use|current|shell-init|help) _cca_codex= ;;
+      ''|*[!A-Za-z0-9_-]*|default|codex|ls|add|rm|share|use|current|shell-init|help) _cca_codex= ;;
     esac
     if [ -n "$_cca_codex" ] && [ -d "$HOME/.codex-accounts/$_cca_codex" ]; then
       CODEX_HOME="$HOME/.codex-accounts/$_cca_codex" command codex "$@"
@@ -948,6 +1027,9 @@ cca — Claude Code accounts
                        from ~/.zshrc to make a new shell start under it
   cca add <name>       create ~/.claude-accounts/<name>, sharing config and history;
                        it and every cca <name> copy mcpServers from ~/.claude.json
+  cca rm <name>        delete ~/.claude-accounts/<name> with its login, label and
+                       usage files; refused while a process runs under it, and
+                       nothing linked in from ~/.claude is touched
   cca share <name>     link the shared history into an account made before sharing
                        existed; --dry-run prints the plan first
   cca codex use <name> make ~/.codex-accounts/<name> the Codex login for new
@@ -969,6 +1051,7 @@ case "${1:-}" in
   ls) shift; cmd_ls "$@" ;;
   help|-h|--help) cmd_help ;;
   add) shift; cmd_add "${1:-}" ;;
+  rm) shift; cmd_rm "${1:-}" ;;
   share) shift; cmd_share "$@" ;;
   use) shift; cmd_use "${1:-}" ;;
   codex) shift; cmd_codex "$@" ;;
@@ -979,6 +1062,7 @@ case "${1:-}" in
   --porcelain-add) shift; cmd_porcelain_add "${1:-}" ;;
   --porcelain-add-codex) shift; cmd_porcelain_add_codex "${1:-}" ;;
   --porcelain-add-model) shift; cmd_porcelain_add_model "${1-}" "${2-}" ;;
+  --porcelain-rm) shift; cmd_porcelain_rm "${1:-}" ;;
   --porcelain-rename) shift; cmd_porcelain_rename "${1:-}" "${2-}" ;;
   --porcelain-start) shift; cmd_porcelain_start "${1:-}" "${2-}" "${3-}" ;;
   --*) die "unknown option $1" ;;

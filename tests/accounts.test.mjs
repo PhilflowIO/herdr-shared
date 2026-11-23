@@ -715,3 +715,146 @@ esac
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// cca rm: a temp HOME with one account made by cca add, and a fake /proc holding no process.
+const rmHome = (prefix) => {
+  const home = towerHome(prefix);
+  mkdirSync(`${home}/.claude/projects/proj`, { recursive: true });
+  writeFileSync(`${home}/.claude/projects/proj/keep.jsonl`, "transcript\n");
+  writeFileSync(`${home}/.claude/history.jsonl`, "history\n");
+  writeFileSync(`${home}/.claude/settings.json`, "{}");
+  mkdirSync(`${home}/proc`);
+  const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state`, CCA_PROC: `${home}/proc` };
+  delete env.CCA_PS;
+  const run = (...args) => spawnSync("sh", [CCA, ...args], { env, encoding: "utf8" });
+  assert.equal(run("add", "work").status, 0);
+  return { home, env, run, dir: `${home}/.claude-accounts/work` };
+};
+
+test("cca rm refuses default, a bad name and a missing account, and rm is a name no account may take", () => {
+  const { home, run } = rmHome("rm-names-");
+  try {
+    const dflt = run("rm", "default");
+    assert.equal(dflt.status, 2);
+    assert.match(dflt.stderr, /default is the ~\/\.claude account/);
+    assert.ok(existsSync(`${home}/.claude/settings.json`), "~/.claude is untouched");
+    assert.equal(run("rm", "bad name").status, 2);
+    assert.equal(run("rm", "../work").status, 2);
+    assert.equal(run("rm", "ls").status, 2, "a reserved name is refused");
+    assert.equal(run("rm").status, 2, "no name is a usage error");
+    assert.equal(run("rm", "nope").status, 3);
+    assert.equal(run("--porcelain-rm", "nope").status, 3);
+    const add = run("add", "rm");
+    assert.equal(add.status, 2);
+    assert.equal(add.stderr.trim(), "rm is a cca command.");
+    assert.equal(existsSync(`${home}/.claude-accounts/rm`), false);
+    assert.ok(existsSync(`${home}/.claude-accounts/work`), "nothing was removed");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("cca rm refuses while a live process runs with the account's CLAUDE_CONFIG_DIR, naming its pids", () => {
+  const { home, env, run, dir } = rmHome("rm-busy-");
+  try {
+    const proc = (pid, vars) => {
+      mkdirSync(`${home}/proc/${pid}`, { recursive: true });
+      writeFileSync(`${home}/proc/${pid}/environ`, [...vars, ""].join("\0"));
+    };
+    // Another account whose name starts the same, and a process without the variable, do not count.
+    proc(100, [`CLAUDE_CONFIG_DIR=${dir}2`, "HOME=/x"]);
+    proc(101, ["PATH=/usr/bin"]);
+    proc(4242, ["PATH=/usr/bin", `CLAUDE_CONFIG_DIR=${dir}`]);
+    proc(4343, [`CLAUDE_CONFIG_DIR=${dir}/`]);
+    const busy = run("rm", "work");
+    assert.equal(busy.status, 4);
+    assert.match(busy.stderr, /4242/);
+    assert.match(busy.stderr, /4343/);
+    assert.doesNotMatch(busy.stderr, /\b10[01]\b/);
+    assert.ok(existsSync(dir), "the account stays");
+    assert.equal(run("--porcelain-rm", "work").status, 4);
+
+    // Without /proc (macOS) the environment comes from ps -E after each command.
+    mkdirSync(`${home}/bin`);
+    const ps = `${home}/bin/ps`;
+    writeFileSync(ps, `#!/bin/sh\nprintf '%s\\n' "  77 /usr/bin/claude CLAUDE_CONFIG_DIR=${dir}2 HOME=/x" "  5150 /usr/bin/claude CLAUDE_CONFIG_DIR=${dir} HOME=/x"\n`);
+    chmodSync(ps, 0o755);
+    const mac = spawnSync("sh", [CCA, "rm", "work"], { env: { ...env, CCA_PS: ps, CCA_PROC: `${home}/no-proc` }, encoding: "utf8" });
+    assert.equal(mac.status, 4);
+    assert.match(mac.stderr, /5150/);
+    assert.doesNotMatch(mac.stderr, /\b77\b/);
+    assert.ok(existsSync(dir));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("cca rm deletes the account folder without following its links into ~/.claude", () => {
+  const { home, run, dir } = rmHome("rm-links-");
+  try {
+    assert.ok(lstatSync(`${dir}/projects`).isSymbolicLink(), "the history is a link, as cca add makes it");
+    writeFileSync(`${dir}/.credentials.json`, '{"claudeAiOauth":{}}');
+    // A link to a folder outside both, and a link to the whole of ~/.claude.
+    mkdirSync(`${home}/outside`);
+    writeFileSync(`${home}/outside/keep`, "x");
+    execFileSync("ln", ["-s", `${home}/outside`, `${dir}/elsewhere`]);
+    execFileSync("ln", ["-s", `${home}/.claude`, `${dir}/whole`]);
+    const before = execFileSync("ls", ["-A", `${home}/.claude`, `${home}/.claude/projects`]).toString();
+
+    const rm = run("rm", "work");
+    assert.equal(rm.status, 0, rm.stderr);
+    assert.equal(existsSync(dir), false, "the account folder is gone");
+    assert.equal(readFileSync(`${home}/.claude/projects/proj/keep.jsonl`, "utf8"), "transcript\n", "a file behind a link stays");
+    assert.equal(readFileSync(`${home}/.claude/history.jsonl`, "utf8"), "history\n");
+    assert.equal(readFileSync(`${home}/outside/keep`, "utf8"), "x");
+    assert.equal(execFileSync("ls", ["-A", `${home}/.claude`, `${home}/.claude/projects`]).toString(), before);
+    assert.deepEqual(execFileSync("ls", ["-A", `${home}/.claude-accounts`]).toString(), "", "no leftover folder");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("cca rm resets the default it pointed at and drops its label and usage files, nothing else", () => {
+  const { home, run } = rmHome("rm-state-");
+  try {
+    const tower = `${home}/state/herdr-tower`;
+    assert.equal(run("add", "work2").status, 0);
+    assert.equal(run("use", "work").status, 0);
+    writeFileSync(`${tower}/labels`, "default\tHome\nwork\tWork\nwork2\tOther\n");
+    for (const f of ["work.json", "work.api.json", "work2.json", "work2.api.json"]) writeFileSync(`${tower}/usage/${f}`, "{}");
+
+    assert.equal(run("rm", "work").status, 0);
+    assert.equal(readFileSync(`${tower}/current`, "utf8").trim(), "default");
+    assert.equal(readFileSync(`${tower}/labels`, "utf8"), "default\tHome\nwork2\tOther\n");
+    assert.equal(existsSync(`${tower}/usage/work.json`), false);
+    assert.equal(existsSync(`${tower}/usage/work.api.json`), false);
+    assert.ok(existsSync(`${tower}/usage/work2.json`));
+    assert.ok(existsSync(`${tower}/usage/work2.api.json`));
+
+    // A default on another account stays where it is.
+    assert.equal(run("use", "work2").status, 0);
+    assert.equal(run("add", "work3").status, 0);
+    assert.equal(run("rm", "work3").status, 0);
+    assert.equal(readFileSync(`${tower}/current`, "utf8").trim(), "work2");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("cca rm says what went and that the login goes with it; --porcelain-rm prints the removed folder", () => {
+  const { home, run, dir } = rmHome("rm-out-");
+  try {
+    const rm = run("rm", "work");
+    assert.equal(rm.status, 0);
+    assert.match(rm.stdout, /^Removed ~\/\.claude-accounts\/work\.$/m);
+    assert.match(rm.stdout, /login/i);
+    assert.equal(run("add", "work").status, 0);
+    const p = run("--porcelain-rm", "work");
+    assert.equal(p.status, 0);
+    assert.equal(p.stdout, `${dir}\n`);
+    assert.equal(existsSync(dir), false);
+    assert.doesNotMatch(run("--porcelain").stdout, /^A\twork\t/m);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
