@@ -537,3 +537,25 @@ test("a custom command may keep the id codex, since only account folder names ar
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("a model that reads Codex usage reports that login's email on an E line of its own", () => {
+  const home = towerHome("model-login-");
+  try {
+    mkdirSync(`${home}/.codex`, { recursive: true });
+    const token = `h.${Buffer.from(JSON.stringify({ email: "me@x" })).toString("base64url")}.s`;
+    writeFileSync(`${home}/.codex/auth.json`, JSON.stringify({ tokens: { id_token: token } }));
+    writeFileSync(`${home}/state/herdr-tower/models.json`, JSON.stringify([
+      { id: "codex", label: "Codex", command: "claude-gpt", usage: "codex-rollout ~/.codex" },
+      { id: "plain", command: "claude-other" },
+      { id: "gone", command: "claude-gone", usage: "codex-rollout ~/missing" },
+    ]));
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state` };
+    const out = execFileSync("sh", [CCA, "--porcelain"], { env }).toString();
+    assert.match(out, /^M\tcodex\tclaude-gpt\t0$/m, "the M line keeps its four fields");
+    assert.match(out, /^E\tcodex\tme@x$/m);
+    assert.doesNotMatch(out, /^E\tplain\t/m, "a model without a Codex reader has no login");
+    assert.doesNotMatch(out, /^E\tgone\t/m, "a Codex home without auth.json has no login");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
