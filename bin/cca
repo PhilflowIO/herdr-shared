@@ -436,14 +436,25 @@ codex_lines() {
   done
 }
 
+# A process's environment, one VAR=value per line. Linux keeps it NUL-separated in
+# /proc/<pid>/environ (readable for one's own processes), where `ps -E` is not an option; BSD and
+# macOS ps print it after the command with -E. Tests point CCA_PS at a stub because the sandbox's
+# ps -E shows no environment, and CCA_PROC at a fake /proc.
+pane_env() {
+  if [ -z "${CCA_PS:-}" ] && [ -r "${CCA_PROC:-/proc}/$1/environ" ]; then
+    tr '\000' '\n' < "${CCA_PROC:-/proc}/$1/environ" 2>/dev/null
+    return 0
+  fi
+  ${CCA_PS:-ps} -E -ww -p "$1" -o command= 2>/dev/null | tr ' ' '\n'
+}
+
 cmd_porcelain() {
   pid=${1:-}
   case "$pid" in *[!0-9]*) pid= ;; esac
   cur=default
   envs=
   if [ -n "$pid" ]; then
-    # Tests point CCA_PS at a stub because the sandbox's ps -E shows no environment.
-    envs=$(${CCA_PS:-ps} -E -ww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n')
+    envs=$(pane_env "$pid")
     d=$(printf '%s\n' "$envs" | grep '^CLAUDE_CONFIG_DIR=' | tail -n 1 | cut -d= -f2-)
     d=${d%/}
     cur=$(acct_name "${d:-$HOME/.claude}")

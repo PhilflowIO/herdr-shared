@@ -589,3 +589,20 @@ test("cca launch reads the one start command, falling back to the layouts' old f
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("cca reads a pane's environment from /proc/<pid>/environ where there is one, as on Linux", () => {
+  const home = towerHome("proc-");
+  try {
+    mkdirSync(`${home}/.claude-accounts/work`, { recursive: true });
+    mkdirSync(`${home}/proc/12345`, { recursive: true });
+    // NUL-separated like the kernel's file, with a value holding a space that ps -E would split.
+    writeFileSync(`${home}/proc/12345/environ`,
+      ["PATH=/usr/bin", "NOTE=two words", `CLAUDE_CONFIG_DIR=${home}/.claude-accounts/work`, "CCA_ACCOUNT=work", ""].join("\0"));
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state`, CCA_PROC: `${home}/proc` };
+    delete env.CCA_PS;
+    const out = execFileSync("sh", [CCA, "--porcelain", "12345"], { env }).toString();
+    assert.equal(out.split("\n")[0], "C\twork");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
