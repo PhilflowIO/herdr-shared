@@ -505,6 +505,20 @@ cmd_porcelain() {
   fi
 }
 
+# With CLAUDE_CONFIG_DIR set, Claude Code reads <dir>/.claude.json instead of ~/.claude.json, so the
+# user-scope MCP servers (its "mcpServers" key) would be missing from every other account. That file
+# also holds the account's login and per-account state, so it is never linked: only this one key is
+# copied from ~/.claude.json and the rest of the account's file is kept as it is. A key missing from
+# ~/.claude.json is removed from the account; a missing ~/.claude.json changes nothing. The file is
+# rewritten only when the key differs, through a temporary file beside it and a rename, keeping its
+# mode (0600 for a new file). A link to ~/.claude.json itself is left alone. Exit 1, with a reason on
+# stderr: no node, or a file that is not a JSON object; the account's file is then left untouched.
+sync_mcp() {
+  command -v node >/dev/null 2>&1 || return 1
+  node -e 'const fs=require("fs"),path=require("path");const [src,dst]=process.argv.slice(1);const fail=(m)=>{process.stderr.write("cca: mcpServers not synced: "+m+"\n");process.exit(1)};let from={};try{from=JSON.parse(fs.readFileSync(src,"utf8"))}catch(e){if(e.code==="ENOENT")process.exit(0);fail(src+" is not readable JSON")}if(!from||typeof from!=="object"||Array.isArray(from))fail(src+" is not a JSON object");let real=dst;try{real=fs.realpathSync(dst)}catch{}try{if(fs.realpathSync(src)===real)process.exit(0)}catch{}let to={},mode=0o600;try{to=JSON.parse(fs.readFileSync(real,"utf8"));mode=fs.statSync(real).mode&0o777}catch(e){if(e.code!=="ENOENT")fail(dst+" is not readable JSON")}if(!to||typeof to!=="object"||Array.isArray(to))fail(dst+" is not a JSON object");const want=from.mcpServers;if(JSON.stringify(to.mcpServers)===JSON.stringify(want))process.exit(0);if(want===undefined)delete to.mcpServers;else to.mcpServers=want;const tmp=path.join(path.dirname(real),"."+path.basename(real)+".cca."+process.pid);try{fs.writeFileSync(tmp,JSON.stringify(to,null,2),{mode,flag:"wx"});fs.chmodSync(tmp,mode);fs.renameSync(tmp,real)}catch{try{fs.unlinkSync(tmp)}catch{}fail("could not write "+dst)}' \
+    "$HOME/.claude.json" "$1/.claude.json"
+}
+
 # A new account is a config dir of its own: everything in ~/.claude is linked in except login and
 # per-session state. Session history is linked too, so every account sees the same transcripts.
 make_account() {
@@ -531,6 +545,8 @@ make_account() {
     esac
     ln -s "$src" "$dir/$x" || { rm -rf "$dir"; printf 'Could not link %s.\n' "$x" >&2; return 5; }
   done
+  # The account works without them, so a failed copy only warns.
+  sync_mcp "$dir" || :
   return 0
 }
 
@@ -678,6 +694,7 @@ cmd_run() {
     [ -d "$dir" ] || die "No account $name. Create it with: cca add $name"
     CLAUDE_CONFIG_DIR="$dir"
     export CLAUDE_CONFIG_DIR
+    sync_mcp "$dir" || :
   fi
   # An explicit choice wins over the shell hook's global default for the session this starts.
   CCA_ACCOUNT=$name
@@ -873,7 +890,8 @@ cca — Claude Code accounts
                        it for every layout
   cca shell-init       the claude() shell function that applies it; eval it
                        from ~/.zshrc to make a new shell start under it
-  cca add <name>       create ~/.claude-accounts/<name>, sharing config and history
+  cca add <name>       create ~/.claude-accounts/<name>, sharing config and history;
+                       it and every cca <name> copy mcpServers from ~/.claude.json
   cca share <name>     link the shared history into an account made before sharing
                        existed; --dry-run prints the plan first
   cca codex use <name> make ~/.codex-accounts/<name> the Codex login for new

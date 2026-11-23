@@ -606,3 +606,51 @@ test("cca reads a pane's environment from /proc/<pid>/environ where there is one
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// A PATH directory with a claude that prints where and how it was started.
+const stubClaude = (home) => {
+  mkdirSync(`${home}/bin`, { recursive: true });
+  writeFileSync(`${home}/bin/claude`,
+    '#!/bin/sh\nprintf "claude %s|%s|%s|%s\\n" "$*" "${CLAUDE_CONFIG_DIR-unset}" "${CCA_ACCOUNT-}" "$PWD"\n');
+  chmodSync(`${home}/bin/claude`, 0o755);
+  return `${home}/bin:${process.env.PATH}`;
+};
+
+test("cca add and cca <name> copy only mcpServers from ~/.claude.json into the account's own file", () => {
+  const home = towerHome("mcp-");
+  try {
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state`, PATH: stubClaude(home) };
+    const run = (...args) => spawnSync("sh", [CCA, ...args], { env, encoding: "utf8" });
+    const main = (o) => writeFileSync(`${home}/.claude.json`, JSON.stringify(o));
+    const acct = `${home}/.claude-accounts/work/.claude.json`;
+    const read = () => JSON.parse(readFileSync(acct, "utf8"));
+    main({ oauthAccount: { emailAddress: "d@x" }, userID: "d", mcpServers: { a: { command: "npx", args: ["a"] } } });
+
+    assert.equal(run("add", "work").status, 0);
+    assert.ok(!lstatSync(acct).isSymbolicLink(), "the account keeps a file of its own");
+    assert.equal(lstatSync(acct).mode & 0o777, 0o600);
+    assert.deepEqual(read(), { mcpServers: { a: { command: "npx", args: ["a"] } } }, "no login or state comes along");
+
+    // The account signs in and keeps its own state; a later change to the servers reaches it on the next start.
+    writeFileSync(acct, JSON.stringify({ oauthAccount: { emailAddress: "w@x" }, userID: "w", mcpServers: { a: {} } }));
+    main({ oauthAccount: { emailAddress: "d@x" }, mcpServers: { a: { command: "npx" }, b: { url: "http://x" } } });
+    const started = run("work", "-c");
+    assert.equal(started.status, 0);
+    assert.match(started.stdout, /^claude -c\|.*\/\.claude-accounts\/work\|work\|/);
+    assert.deepEqual(read(), { oauthAccount: { emailAddress: "w@x" }, userID: "w",
+      mcpServers: { a: { command: "npx" }, b: { url: "http://x" } } });
+
+    main({ oauthAccount: { emailAddress: "d@x" } });
+    assert.equal(run("work").status, 0);
+    assert.deepEqual(read(), { oauthAccount: { emailAddress: "w@x" }, userID: "w" }, "a removed server goes too");
+
+    writeFileSync(acct, "{broken");
+    main({ mcpServers: { a: {} } });
+    const broken = run("work");
+    assert.equal(broken.status, 0, "a file it cannot read never stops claude from starting");
+    assert.match(broken.stderr, /mcpServers not synced/);
+    assert.equal(readFileSync(acct, "utf8"), "{broken", "and is left as it was");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
