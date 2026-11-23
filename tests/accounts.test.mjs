@@ -559,3 +559,33 @@ test("a model that reads Codex usage reports that login's email on an E line of 
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("cca launch reads the one start command, falling back to the layouts' old files until one is saved", () => {
+  const home = towerHome("launch-");
+  try {
+    const env = { ...process.env, HOME: home, XDG_STATE_HOME: `${home}/state` };
+    const tower = `${home}/state/herdr-tower`;
+    const launch = (...args) => spawnSync("sh", [CCA, "launch", ...args], { env, encoding: "utf8" });
+
+    mkdirSync(tower, { recursive: true });
+    assert.equal(launch().stdout, "");
+    writeFileSync(`${tower}/arcade-launch`, "claude\n");
+    writeFileSync(`${tower}/chiikawa-launch`, "  ccode  \n");
+    assert.equal(launch().stdout, "ccode\n");
+
+    assert.equal(launch("set", " ccode -m fmax ").status, 0);
+    assert.equal(readFileSync(`${tower}/launch`, "utf8"), "ccode -m fmax\n");
+    assert.equal(launch().stdout, "ccode -m fmax\n");
+
+    // A saved empty command means claude, not the old files.
+    assert.equal(launch("set", "").status, 0);
+    assert.equal(launch().stdout, "");
+
+    assert.equal(launch("set", "a\tb").status, 2);
+    assert.equal(launch("set", "a\nb").status, 2);
+    assert.equal(launch("bogus").status, 2);
+    assert.equal(readFileSync(`${tower}/launch`, "utf8"), "\n");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
